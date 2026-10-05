@@ -101,7 +101,9 @@ $("setup").onsubmit = e => {
   e.preventDefault();
   saveCfg({key:$("sKey").value.trim(), tok:$("sTok").value.trim(), repo:$("sRepo").value.trim(),
            voice:$("sVoice").value, model:$("sModel").value.trim()||DEFAULT_MODELS[0]});
-  $("setup").classList.add("hide"); init();
+  if (!cfg().key){ $("status").textContent = "Couldn't save — turn off Private Browsing and try again."; return; }
+  if (location.hash.includes("setup")) history.replaceState(null, "", location.pathname + location.search);
+  $("setup").classList.add("hide"); init(); status("Saved ✓  Tap to call");
 };
 $("openSettings").onclick = showSetup;
 
@@ -407,7 +409,7 @@ $("mute").onclick = () => { muted = !muted; $("mute").textContent = muted ? "Unm
 
 function init(){
   const c = cfg();
-  if (!c.key || !c.tok || !c.repo || location.hash === "#setup") return showSetup();
+  if (!c.key || !c.tok || !c.repo || location.hash.includes("setup")) return showSetup();
   $("callView").classList.remove("hide"); $("modes").innerHTML = "";
   [["Briefing","briefing"],["Recap","recap"],["Quiz me","quiz"],["Journal","journal"],["Check-in","checkin"]].forEach(([l,m]) => {
     const b = document.createElement("button"); b.textContent = l; b.onclick = () => start(m); $("modes").appendChild(b); });

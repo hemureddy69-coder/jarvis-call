@@ -1,0 +1,422 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#04121a">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg">
+<title>Jarvis</title>
+<!-- Jarvis call app — part of a fork of MARK LV by FatihMakes (CC BY-NC 4.0).
+     Talks to Gemini Live directly from this phone. Your keys are stored only in
+     this browser (localStorage) and are never part of this public page. -->
+<style>
+:root{--bg:#04121a;--card:#0a2230;--pri:#2ee6d6;--dim:#7fa3ad;--red:#ff4d5e;--green:#22c55e;--text:#e8f6f8;--line:#163847}
+*{box-sizing:border-box}html,body{margin:0;min-height:100%;background:var(--bg);color:var(--text);
+font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:24px 16px calc(24px + env(safe-area-inset-bottom));max-width:560px;margin:0 auto}
+h1{font-size:13px;letter-spacing:.3em;color:var(--dim);font-weight:600;margin:4px 0 0}
+#who{font-size:28px;font-weight:700;margin:6px 0 2px;text-align:center}
+#status{color:var(--dim);font-size:15px;min-height:20px;text-align:center}
+#timer{font-variant-numeric:tabular-nums;color:var(--dim);margin-top:4px;min-height:18px}
+.orb{width:160px;height:160px;border-radius:50%;margin:28px 0 20px;
+background:radial-gradient(circle at 50% 45%,#5ff7ea 0,#16a99d 38%,#073c43 70%,transparent 72%);
+box-shadow:0 0 60px rgba(46,230,214,.35);transition:transform .12s}
+.orb.ring{animation:pulse 1.1s infinite}@keyframes pulse{50%{transform:scale(1.08);box-shadow:0 0 90px rgba(46,230,214,.6)}}
+#caps{width:100%;flex:1;overflow-y:auto;background:var(--card);border-radius:16px;padding:14px;font-size:15px;line-height:1.45;min-height:110px;max-height:38vh}
+#caps p{margin:0 0 8px}#caps .you{color:#9fd3ff}#caps .sys{color:var(--dim);font-style:italic}
+.row{display:flex;gap:18px;margin-top:20px;flex-wrap:wrap;justify-content:center}
+button{border:0;border-radius:999px;font-size:16px;font-weight:700;color:#fff;padding:15px 26px;min-width:120px;cursor:pointer;font-family:inherit}
+.go{background:var(--green)}.stop{background:var(--red)}.ghost{background:var(--line);color:var(--text)}
+.chips{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:14px}
+.chips button{min-width:0;padding:10px 14px;font-size:14px;font-weight:600;background:var(--line)}
+.link{background:none;color:var(--dim);font-size:13px;font-weight:500;text-decoration:underline;padding:8px;min-width:0;margin-top:10px}
+form{width:100%;background:var(--card);border-radius:16px;padding:18px;margin-top:18px}
+label{display:block;font-size:13px;color:var(--dim);margin:12px 0 4px}
+input,select{width:100%;padding:12px;border-radius:10px;border:1px solid var(--line);background:#061a24;color:var(--text);font-size:15px}
+.note{font-size:12px;color:var(--dim);line-height:1.5;margin-top:12px}
+.hide{display:none!important}
+</style>
+</head>
+<body><main>
+<h1>JARVIS</h1>
+<div id="who">Jarvis</div>
+<div id="status"></div>
+<div id="timer"></div>
+
+<section id="callView" class="hide" style="width:100%;display:flex;flex-direction:column;align-items:center">
+  <div class="orb" id="orb"></div>
+  <div id="caps"></div>
+  <div class="row" id="idle"><button class="go" id="answer">Answer</button></div>
+  <div class="chips" id="modes"></div>
+  <div class="row hide" id="live"><button class="ghost" id="mute">Mute</button><button class="stop" id="hang">Hang up</button></div>
+  <button class="link" id="openSettings">Settings</button>
+</section>
+
+<form id="setup" class="hide" autocomplete="off">
+  <b>One-time setup (this phone only)</b>
+  <label>Gemini API key (aistudio.google.com/apikey)</label>
+  <input id="sKey" type="password" placeholder="AIza…">
+  <label>GitHub token (the one you made for Jarvis)</label>
+  <input id="sTok" type="password" placeholder="github_pat_…">
+  <label>Private data repo</label>
+  <input id="sRepo" placeholder="yourname/jarvis-data">
+  <label>Voice</label>
+  <select id="sVoice"><option>Puck</option><option>Charon</option><option>Kore</option><option>Fenrir</option><option>Aoede</option></select>
+  <label>Model (leave as is unless calls fail)</label>
+  <input id="sModel">
+  <div class="row"><button class="go" type="submit">Save</button></div>
+  <div class="note">Saved only in this browser on this phone — never uploaded, never in the page code.
+  For safety, in Google AI Studio → API key → restrict the key to the "Generative Language API".</div>
+</form>
+</main>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const DEFAULT_MODELS = ["models/gemini-3.1-flash-live-preview", "models/gemini-3.8-live",
+                        "models/gemini-2.5-flash-native-audio-preview-12-2025"];
+const LABELS = {briefing:"Morning briefing", recap:"Evening recap", checkin:"Study check-in",
+  checkin_followup:"Check-in follow-up", journal:"Night journal", quiz:"Quiz time", reminder:"Reminder", inbound:"Jarvis"};
+const MAX_MIN = 8;
+
+// ── settings ────────────────────────────────────────────────────────────────
+function cfg(){ try { return JSON.parse(localStorage.getItem("jarvis_cfg")||"{}"); } catch(e){ return {}; } }
+function saveCfg(c){ try { localStorage.setItem("jarvis_cfg", JSON.stringify(c)); } catch(e){} }
+const hash = new URLSearchParams(location.hash.slice(1));
+const MODE = hash.get("mode") || "";
+const RING_ID = hash.get("id") || "";
+const MSG = hash.get("msg") || "";
+
+function showSetup(){
+  const c = cfg();
+  $("sKey").value = c.key||""; $("sTok").value = c.tok||""; $("sRepo").value = c.repo||"";
+  $("sVoice").value = c.voice||"Puck"; $("sModel").value = c.model||DEFAULT_MODELS[0];
+  $("setup").classList.remove("hide"); $("callView").classList.add("hide");
+  $("status").textContent = "Set up this phone once.";
+}
+$("setup").onsubmit = e => {
+  e.preventDefault();
+  saveCfg({key:$("sKey").value.trim(), tok:$("sTok").value.trim(), repo:$("sRepo").value.trim(),
+           voice:$("sVoice").value, model:$("sModel").value.trim()||DEFAULT_MODELS[0]});
+  $("setup").classList.add("hide"); init();
+};
+$("openSettings").onclick = showSetup;
+
+// ── GitHub data (private repo, memory/<name>.json) ──────────────────────────
+const SHA = {};
+async function gh(path, opts={}){
+  const c = cfg();
+  return fetch(`https://api.github.com/repos/${c.repo}/contents/${path}`, {...opts,
+    headers:{Authorization:`Bearer ${c.tok}`, Accept:"application/vnd.github+json", ...(opts.headers||{})}, cache:"no-store"});
+}
+const b64dec = s => new TextDecoder().decode(Uint8Array.from(atob(s.replace(/\n/g,"")), ch => ch.charCodeAt(0)));
+const b64enc = s => { const b = new TextEncoder().encode(s); let bin=""; b.forEach(x => bin += String.fromCharCode(x)); return btoa(bin); };
+async function load(name){
+  const r = await gh(`memory/${name}.json`);
+  if (r.status === 404) { delete SHA[name]; return {}; }
+  if (!r.ok) throw new Error(`GitHub ${r.status} reading ${name}`);
+  const j = await r.json(); SHA[name] = j.sha;
+  try { return JSON.parse(b64dec(j.content) || "{}"); } catch(e){ return {}; }
+}
+async function save(name, data){
+  for (let i=0;i<3;i++){
+    const body = {message:`jarvis app: ${name}`, content:b64enc(JSON.stringify(data,null,2))};
+    if (SHA[name]) body.sha = SHA[name];
+    const r = await gh(`memory/${name}.json`, {method:"PUT", body:JSON.stringify(body)});
+    if (r.ok){ SHA[name] = (await r.json()).content.sha; return; }
+    if (r.status===409||r.status===422){ await load(name); continue; }
+    throw new Error(`GitHub ${r.status} saving ${name}`);
+  }
+}
+async function update(name, defaults, fn){
+  for (let i=0;i<3;i++){
+    const d = Object.assign(JSON.parse(JSON.stringify(defaults)), await load(name));
+    const out = fn(d);
+    try { await save(name, d); return out; } catch(e){ if (i===2) throw e; }
+  }
+}
+
+// ── dates (local, matches the Python side) ──────────────────────────────────
+const pad = n => String(n).padStart(2,"0");
+const isoDate = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+const isoLocal = d => `${isoDate(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+const DAYS = ["sunday","monday","tuesday","wednesday","thursday","friday","saturday"];
+const newId = () => Math.random().toString(16).slice(2,8);
+
+// ── what Jarvis knows ───────────────────────────────────────────────────────
+let DATA = {};
+const FILES = {college:{classes:[],deadlines:[]}, attendance:{records:[]}, exams:{exams:[]}, habits:{habits:[],log:{}},
+  expenses:{items:[],budget:0}, birthdays:{people:[]}, journal:{entries:[]}, quiz_log:{items:[]},
+  checkins:{items:[]}, context:{}};
+async function loadAll(){
+  const names = Object.keys(FILES);
+  const vals = await Promise.all(names.map(n => load(n).catch(()=>({}))));
+  names.forEach((n,i) => DATA[n] = Object.assign(JSON.parse(JSON.stringify(FILES[n])), vals[i]));
+}
+function facts(){
+  const now = new Date(), today = isoDate(now), dname = DAYS[now.getDay()], tname = DAYS[(now.getDay()+1)%7];
+  const C = DATA.college, out = [];
+  const cls = d => C.classes.filter(c => c.day===d).sort((a,b)=>a.start.localeCompare(b.start))
+                   .map(c => `${c.subject} ${c.start}${c.room?" in "+c.room:""}`).join("; ") || "none";
+  out.push(`Now: ${now.toLocaleString("en-IN",{weekday:"long",day:"numeric",month:"long",hour:"numeric",minute:"2-digit"})}`);
+  out.push(`Classes today: ${cls(dname)}`); out.push(`Classes tomorrow: ${cls(tname)}`);
+  const week = new Date(now.getTime()+7*864e5);
+  const dl = C.deadlines.filter(d => !d.done && new Date(d.due) <= week).sort((a,b)=>a.due.localeCompare(b.due));
+  out.push(`Open deadlines (next 7 days, incl. overdue): ${dl.map(d=>`${d.title}${d.subject?" ("+d.subject+")":""} due ${d.due.replace("T"," ")}`).join("; ")||"none"}`);
+  const att = {};
+  DATA.attendance.records.forEach(r => { if (r.status==="cancelled") return; const k=r.subject; att[k]=att[k]||[0,0]; att[k][1]++; if(r.status==="present") att[k][0]++; });
+  const attS = Object.entries(att).map(([s,[p,t]]) => `${s} ${Math.round(100*p/t)}%`).join("; ");
+  if (attS) out.push(`Attendance: ${attS} (minimum 75%)`);
+  const ex = DATA.exams.exams.filter(e => e.date >= today).sort((a,b)=>a.date.localeCompare(b.date))
+    .map(e => `${e.subject} on ${e.date}, topics left: ${e.topics.filter(t=>!t.done).map(t=>t.name).join(", ")||"none"}`);
+  if (ex.length) out.push(`Upcoming exams: ${ex.join(" | ")}`);
+  const H = DATA.habits, doneToday = H.log[today]||[];
+  if (H.habits.length) out.push(`Habits: ${H.habits.map(h => `${h.name} ${doneToday.includes(h.id)?"done":"not done"} today`).join("; ")}`);
+  const E = DATA.expenses, month = today.slice(0,7);
+  const spent = E.items.filter(i => i.date.startsWith(month)).reduce((a,i)=>a+Number(i.amount||0),0);
+  const spentToday = E.items.filter(i => i.date===today).reduce((a,i)=>a+Number(i.amount||0),0);
+  out.push(`Money: spent ₹${spentToday} today, ₹${spent} this month${E.budget?` of ₹${E.budget} budget`:""}`);
+  const bd = DATA.birthdays.people.filter(p => { const d=new Date(now.getFullYear(), p.month-1, p.day); const diff=Math.round((d-new Date(today))/864e5); return diff>=0&&diff<=3; })
+    .map(p => `${p.name} (${p.month}/${p.day})`);
+  if (bd.length) out.push(`Birthdays in the next 3 days: ${bd.join(", ")}`);
+  const X = DATA.context||{};
+  if (X.weather_today) out.push(`Weather today: ${X.weather_today}`);
+  if (X.weather_tomorrow) out.push(`Weather tomorrow: ${X.weather_tomorrow}`);
+  if (X.headlines) out.push(`Headlines (pick the 3 most important):\n${X.headlines}`);
+  const q = DATA.quiz_log.items.slice(-3).filter(q => q.weak);
+  if (q.length) out.push(`Weak spots from recent quizzes: ${q.map(q=>`${q.topic}: ${q.weak}`).join("; ")}`);
+  const j = DATA.journal.entries.slice(-1)[0];
+  if (j && j.tomorrow) out.push(`Last journal said today's priority: ${j.tomorrow}`);
+  return out.join("\n");
+}
+function prompts(mode){
+  const user = (DATA.context && DATA.context.user_name) || "Hemanth";
+  const asst = (DATA.context && DATA.context.assistant_name) || "Jarvis";
+  let sys = `You are ${asst}, ${user}'s personal AI assistant, talking to ${user} on a PHONE CALL. `+
+    `Speak naturally like a friendly, sharp assistant: short sentences, one idea at a time, no lists or markdown. `+
+    `Pause for answers. Use the tools to change deadlines, timetable, attendance, habits, expenses, or to schedule a call back — confirm briefly after each. `+
+    `Never invent data. When finished, say a short goodbye and call end_call.\n\nThe user's data:\n${facts()}`;
+  let open = `(The call just connected. Greet ${user}.)`;
+  const lastOpen = DATA.checkins.items.filter(c => c.done===null || c.done===undefined).slice(-1)[0];
+  const M = {
+    briefing: [`\n\nThis call is the MORNING BRIEFING: in 60–90 seconds cover today's classes, deadlines, weather (umbrella if rain ≥50%), revision topics, habits, budget, birthdays and 3 headlines, then ask if they want to change anything.`, `(Call connected. Greet ${user} and give the morning briefing.)`],
+    recap: [`\n\nThis call is the EVENING RECAP: tomorrow's classes and weather, what's still pending, habits not done, today's spending; end by suggesting one thing to finish tonight.`, `(Call connected. Greet ${user} and give the evening recap.)`],
+    reminder: [`\n\nThis call is a REMINDER. Deliver this right away: "${MSG || "you asked me to call"}". Then ask if they need anything else (e.g. snooze with schedule_call).`, `(Call connected. Greet ${user} and deliver the reminder.)`],
+    checkin: [`\n\nThis is a STUDY CHECK-IN: ask what they're working on and agree ONE concrete goal for the next hour. Call save_checkin, say you'll call back in an hour, bye, end_call. Under 2 minutes.`, `(Call connected. Ask ${user} what they're working on right now.)`],
+    checkin_followup: [`\n\nThis is the FOLLOW-UP to a study check-in. Earlier goal: "${lastOpen?lastOpen.goal:"unknown"}". Ask if they finished; celebrate or find a smaller next step. Call save_checkin_result, bye, end_call.`, `(Call connected. Ask ${user} whether they finished: ${lastOpen?lastOpen.goal:"their goal"}.)`],
+    journal: [`\n\nThis is the NIGHT JOURNAL: ask one at a time — best moment today, what was hard, mood 1–10, the one priority for tomorrow. React warmly in one line each, no lectures. Summarise in two sentences, call save_journal, good night, end_call. If they sound very low, be kind and suggest talking to someone they trust.`, `(Call connected. Greet ${user} softly and ask about the best moment of today.)`],
+    quiz: [`\n\nThis is a QUIZ on: ${MSG || "today's revision topics (or ask what subject)"}. Ask 5 questions one at a time, easy to harder; say right/wrong with the correct answer in one line. At the end give the score and weak spots, call record_quiz, bye, end_call.`, `(Call connected. Tell ${user} it's a 5-question quiz and ask question 1.)`],
+    inbound: [`\n\n${user} called YOU. Help with anything: questions about their day, updating plans, or taking notes (turn clear tasks into deadlines or scheduled calls).`, `(${user} just called you. Pick up with a quick greeting and "what can I do?")`],
+  };
+  const m = M[mode] || M.inbound;
+  return {sys: sys + m[0], open: m[1]};
+}
+
+// ── tools the call can use ──────────────────────────────────────────────────
+const S = (d) => ({type:"STRING", description:d}), N = (d) => ({type:"NUMBER", description:d});
+const TOOLS = [
+ {name:"add_deadline", description:"Add an assignment/exam/project deadline.", parameters:{type:"OBJECT", properties:{title:S("what is due"), subject:S("subject"), due_date:S("YYYY-MM-DD"), due_time:S("HH:MM, default 23:59")}, required:["title","due_date"]}},
+ {name:"complete_deadline", description:"Mark a deadline done.", parameters:{type:"OBJECT", properties:{title:S("deadline title or part of it")}, required:["title"]}},
+ {name:"add_class", description:"Add a weekly class to the timetable.", parameters:{type:"OBJECT", properties:{subject:S("subject"), day:S("monday..sunday"), start:S("HH:MM 24h"), end:S("HH:MM"), room:S("room")}, required:["subject","day","start"]}},
+ {name:"mark_attendance", description:"Record attendance for a class.", parameters:{type:"OBJECT", properties:{subject:S("subject"), status:S("present, absent or cancelled"), date:S("YYYY-MM-DD, default today")}, required:["subject","status"]}},
+ {name:"log_expense", description:"Log money spent (rupees).", parameters:{type:"OBJECT", properties:{amount:N("rupees"), note:S("what for"), category:S("food, travel, education, bills, fun, shopping, health, other")}, required:["amount"]}},
+ {name:"habit_done", description:"Mark a habit done today.", parameters:{type:"OBJECT", properties:{habit:S("habit name")}, required:["habit"]}},
+ {name:"topic_done", description:"Mark an exam revision topic as finished.", parameters:{type:"OBJECT", properties:{topic:S("topic")}, required:["topic"]}},
+ {name:"schedule_call", description:"Call the user again later.", parameters:{type:"OBJECT", properties:{minutes:N("minutes from now"), mode:S("reminder, briefing, recap, checkin, journal or quiz"), message:S("what to remind / quiz topic")}, required:["minutes"]}},
+ {name:"save_checkin", description:"Record the study check-in goal (also books the follow-up call).", parameters:{type:"OBJECT", properties:{task:S("what they work on"), goal:S("goal for the next hour")}, required:["goal"]}},
+ {name:"save_checkin_result", description:"Record whether the check-in goal was done.", parameters:{type:"OBJECT", properties:{done:{type:"BOOLEAN"}, note:S("note")}, required:["done"]}},
+ {name:"save_journal", description:"Save tonight's journal.", parameters:{type:"OBJECT", properties:{best:S(""), hard:S(""), mood:{type:"INTEGER", description:"1-10"}, tomorrow:S(""), summary:S("")}, required:["summary"]}},
+ {name:"record_quiz", description:"Save the quiz result.", parameters:{type:"OBJECT", properties:{topic:S(""), score:{type:"INTEGER"}, total:{type:"INTEGER"}, weak_points:S("")}, required:["score","total"]}},
+ {name:"end_call", description:"Hang up. Say goodbye FIRST.", parameters:{type:"OBJECT", properties:{}}},
+];
+const CATS = {food:["lunch","dinner","breakfast","snack","tea","coffee","chai","canteen","mess","swiggy","zomato","food","juice"],
+  travel:["auto","bus","uber","ola","rapido","metro","train","cab","petrol"], education:["book","xerox","print","fee","stationery"],
+  bills:["recharge","wifi","bill","rent"], fun:["movie","netflix","game","party"], shopping:["clothes","shoes","amazon","flipkart"], health:["medicine","pharmacy","doctor"]};
+const guessCat = t => { t=(t||"").toLowerCase(); for (const [c,ws] of Object.entries(CATS)) if (ws.some(w=>t.includes(w))) return c; return "other"; };
+const match = (a,b) => (a||"").toLowerCase().includes((b||"").toLowerCase()) || (b||"").toLowerCase().includes((a||"").toLowerCase());
+async function queueCall(minutes, kind, message){
+  const at = new Date(Date.now() + Math.max(1, minutes)*60000);
+  await update("phone_call_state", {fired:{}, queue:[], count:{date:"",n:0}}, s => { s.queue.push({at:isoLocal(at), kind, message:message||"", attempt:1, source:"auto"}); });
+  return at;
+}
+async function runTool(name, a){
+  const today = isoDate(new Date());
+  switch(name){
+    case "add_deadline": {
+      const due = `${a.due_date}T${(a.due_time||"23:59").slice(0,5)}`;
+      await update("college", FILES.college, d => d.deadlines.push({id:newId(), title:a.title, subject:a.subject||"", due, done:false}));
+      return `Saved: ${a.title} due ${due.replace("T"," ")}.`; }
+    case "complete_deadline": {
+      const n = await update("college", FILES.college, d => { let k=0; d.deadlines.forEach(x => { if(!x.done && match(x.title+" "+(x.subject||""), a.title)){ x.done=true; x.done_at=isoLocal(new Date()).slice(0,16); k++; }}); return k; });
+      return n ? "Marked done." : "No open deadline matched."; }
+    case "add_class": {
+      const day = (a.day||"").toLowerCase(); const dd = DAYS.find(x => x.startsWith(day.slice(0,3)));
+      if (!dd) return "Need a weekday.";
+      await update("college", FILES.college, d => d.classes.push({id:newId(), subject:a.subject, day:dd, start:a.start.slice(0,5), end:(a.end||"").slice(0,5), room:a.room||""}));
+      return `Added ${a.subject} on ${dd} at ${a.start}.`; }
+    case "mark_attendance": {
+      const date = a.date || today, status = /cancel/i.test(a.status)?"cancelled":/abs|miss|bunk|skip/i.test(a.status)?"absent":"present";
+      await update("attendance", {records:[], asked:{}}, d => { d.records = d.records.filter(r => !(r.date===date && r.subject.toLowerCase()===a.subject.toLowerCase())); d.records.push({date, subject:a.subject, status}); });
+      return `Marked ${status} for ${a.subject}.`; }
+    case "log_expense": {
+      await update("expenses", {items:[], budget:0, warned:{}}, d => d.items.push({id:newId(), date:today, amount:Number(a.amount), category:a.category||guessCat(a.note), note:a.note||""}));
+      return `Logged ₹${a.amount}.`; }
+    case "habit_done": {
+      return await update("habits", {habits:[], log:{}}, d => {
+        let h = d.habits.find(x => match(x.name, a.habit));
+        if (!h){ h = {id:newId(), name:a.habit, created:today}; d.habits.push(h); }
+        d.log[today] = d.log[today]||[]; if (!d.log[today].includes(h.id)) d.log[today].push(h.id);
+        return `${h.name} done today.`; }); }
+    case "topic_done": {
+      const n = await update("exams", {exams:[]}, d => { let k=0; d.exams.forEach(e => e.topics.forEach(t => { if(!t.done && match(t.name, a.topic)){ t.done=true; k++; } })); return k; });
+      return n ? "Ticked off." : "Topic not found."; }
+    case "schedule_call": {
+      const at = await queueCall(Number(a.minutes)||10, a.mode||"reminder", a.message||"");
+      return `I'll call at ${at.toLocaleTimeString("en-IN",{hour:"numeric",minute:"2-digit"})} (GitHub may ring a few minutes late).`; }
+    case "save_checkin": {
+      await update("checkins", {items:[]}, d => d.items.push({date:today, time:isoLocal(new Date()).slice(11,16), task:a.task||"", goal:a.goal, done:null}));
+      await queueCall(60, "checkin_followup", "");
+      return "Saved; follow-up call booked in about an hour."; }
+    case "save_checkin_result": {
+      await update("checkins", {items:[]}, d => { const o = d.items.filter(i => i.done===null||i.done===undefined).slice(-1)[0]; if (o){ o.done=!!a.done; o.note=a.note||""; } });
+      return "Saved."; }
+    case "save_journal": {
+      await update("journal", {entries:[]}, d => { d.entries = d.entries.filter(e => e.date!==today); d.entries.push({date:today, best:a.best||"", hard:a.hard||"", mood:a.mood||null, tomorrow:a.tomorrow||"", summary:a.summary||""}); });
+      return "Journal saved."; }
+    case "record_quiz": {
+      await update("quiz_log", {items:[]}, d => d.items.push({date:today, topic:a.topic||MSG||"", score:a.score|0, total:a.total|0, weak:a.weak_points||""}));
+      return "Quiz saved."; }
+    case "end_call": hangUpSoon(); return "Ending the call.";
+  }
+  return "Unknown tool.";
+}
+
+// ── the call ────────────────────────────────────────────────────────────────
+let ws, inCtx, outCtx, stream, node, nextT=0, srcs=[], muted=false, ending=false, t0=0, tick, wake, modelIx=0, setupDone=false, curMode="";
+let lastWho="", lastP=null;
+const cap = (cls,txt) => { const p=document.createElement("p"); p.className=cls; p.textContent=txt; $("caps").appendChild(p); $("caps").scrollTop=1e9; return p; };
+function caption(who, txt){ if (who!==lastWho || !lastP){ lastP=cap(who,""); lastWho=who; } lastP.textContent+=txt; $("caps").scrollTop=1e9; }
+const status = s => $("status").textContent = s;
+
+const WORKLET = `class Cap extends AudioWorkletProcessor{constructor(){super();this.r=sampleRate/16000;this.p=0;this.b=new Int16Array(1600);this.i=0}
+process(inp){const ch=inp[0]&&inp[0][0];if(!ch)return true;
+for(;this.p<ch.length;this.p+=this.r){const k=Math.floor(this.p),f=this.p-k,a=ch[k],c=k+1<ch.length?ch[k+1]:a;
+let v=a+(c-a)*f;v=Math.max(-1,Math.min(1,v));this.b[this.i++]=v<0?v*32768:v*32767;
+if(this.i===1600){this.port.postMessage(this.b.buffer.slice(0));this.i=0}}this.p-=ch.length;return true}}
+registerProcessor('cap',Cap)`;
+function abToB64(buf){ const b=new Uint8Array(buf); let s=""; for (let i=0;i<b.length;i+=0x8000) s+=String.fromCharCode.apply(null,b.subarray(i,i+0x8000)); return btoa(s); }
+
+async function start(mode){
+  curMode = mode;
+  $("idle").classList.add("hide"); $("modes").classList.add("hide"); $("orb").classList.remove("ring");
+  status("Getting your day ready…");
+  try { stream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:1}}); }
+  catch(e){ status("Microphone blocked — allow it and try again."); $("idle").classList.remove("hide"); return; }
+  inCtx = new AudioContext(); outCtx = new AudioContext(); await inCtx.resume(); await outCtx.resume();
+  try { await loadAll(); } catch(e){ cap("sys", "Couldn't load your data from GitHub: "+e.message); }
+  if (RING_ID) update("call_log", {rings:[]}, d => { const r = d.rings.find(x => x.id===RING_ID); if (r) r.answered = true; }).catch(()=>{});
+  await inCtx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLET],{type:"application/javascript"})));
+  node = new AudioWorkletNode(inCtx, "cap"); inCtx.createMediaStreamSource(stream).connect(node);
+  node.port.onmessage = e => { if (ws && ws.readyState===1 && setupDone && !muted)
+    ws.send(JSON.stringify({realtimeInput:{audio:{data:abToB64(e.data), mimeType:"audio/pcm;rate=16000"}}})); };
+  try { wake = await navigator.wakeLock.request("screen"); } catch(e){}
+  connect();
+}
+
+function connect(){
+  const c = cfg(), models = [c.model||DEFAULT_MODELS[0], ...DEFAULT_MODELS.filter(m => m!==c.model)];
+  const model = models[modelIx];
+  if (!model){ status("Couldn't connect to Gemini — check your API key in Settings."); finish("Call failed"); return; }
+  status("Connecting…"); setupDone = false;
+  ws = new WebSocket(`wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${encodeURIComponent(c.key)}`);
+  ws.onopen = () => {
+    const p = prompts(curMode);
+    ws.send(JSON.stringify({setup:{model,
+      generationConfig:{responseModalities:["AUDIO"], speechConfig:{voiceConfig:{prebuiltVoiceConfig:{voiceName:c.voice||"Puck"}}}},
+      systemInstruction:{parts:[{text:p.sys}]}, tools:[{functionDeclarations:TOOLS}],
+      inputAudioTranscription:{}, outputAudioTranscription:{}}}));
+    ws._open = p.open;
+  };
+  ws.onmessage = async e => {
+    const txt = typeof e.data === "string" ? e.data : await e.data.text();
+    let m; try { m = JSON.parse(txt); } catch(_){ return; }
+    if (m.setupComplete){
+      setupDone = true; status("Connected"); $("live").classList.remove("hide"); t0 = Date.now();
+      tick = setInterval(clock, 500);
+      ws.send(JSON.stringify({clientContent:{turns:[{role:"user", parts:[{text:ws._open}]}], turnComplete:true}}));
+      return;
+    }
+    const sc = m.serverContent;
+    if (sc){
+      if (sc.interrupted){ srcs.forEach(s => { try{ s.stop(); }catch(_){} }); srcs=[]; nextT=0; }
+      (sc.modelTurn && sc.modelTurn.parts || []).forEach(p => { if (p.inlineData && p.inlineData.data) play(p.inlineData); });
+      if (sc.inputTranscription && sc.inputTranscription.text) caption("you", sc.inputTranscription.text);
+      if (sc.outputTranscription && sc.outputTranscription.text) caption("jarvis", sc.outputTranscription.text);
+    }
+    if (m.toolCall){
+      const res = [];
+      for (const f of m.toolCall.functionCalls || []){
+        let r; try { r = await runTool(f.name, f.args || {}); } catch(err){ r = "Error: " + err.message; }
+        cap("sys", `✓ ${r}`);
+        res.push({id:f.id, name:f.name, response:{result:r}});
+      }
+      if (ws.readyState===1) ws.send(JSON.stringify({toolResponse:{functionResponses:res}}));
+    }
+  };
+  ws.onclose = ev => {
+    if (!setupDone && !ending && ev.code !== 1000){
+      cap("sys", `Model ${model} refused (${ev.code} ${ev.reason||""}). Trying another…`);
+      modelIx++; return connect();
+    }
+    if (!ending) finish("Call ended");
+  };
+}
+function play(inline){
+  const rate = Number((/rate=(\d+)/.exec(inline.mimeType||"")||[])[1]) || 24000;
+  const bin = atob(inline.data), n = bin.length >> 1, buf = outCtx.createBuffer(1, n, rate), ch = buf.getChannelData(0);
+  for (let i=0;i<n;i++){ let v = bin.charCodeAt(2*i) | (bin.charCodeAt(2*i+1) << 8); if (v >= 32768) v -= 65536; ch[i] = v/32768; }
+  const s = outCtx.createBufferSource(); s.buffer = buf; s.connect(outCtx.destination);
+  const at = Math.max(nextT, outCtx.currentTime + 0.06); s.start(at); nextT = at + buf.duration;
+  srcs.push(s); s.onended = () => { srcs = srcs.filter(x => x!==s); };
+  $("orb").style.transform = "scale(1.06)"; setTimeout(() => $("orb").style.transform = "", 120);
+}
+function clock(){
+  const s = Math.floor((Date.now()-t0)/1000); $("timer").textContent = `${Math.floor(s/60)}:${pad(s%60)}`;
+  if (s === (MAX_MIN-1)*60 && ws && ws.readyState===1)
+    ws.send(JSON.stringify({clientContent:{turns:[{role:"user",parts:[{text:"(System: one minute left. Wrap up, say goodbye and call end_call.)"}]}],turnComplete:true}}));
+  if (s >= MAX_MIN*60 + 30) finish("Call ended (time limit)");
+}
+function hangUpSoon(){ ending = true; const wait = Math.max(0, (nextT - outCtx.currentTime)*1000) + 600; setTimeout(() => finish("Call ended"), wait); }
+function finish(msg){
+  ending = true; status(msg); clearInterval(tick); $("live").classList.add("hide");
+  try{ ws && ws.close(1000); }catch(_){} try{ stream && stream.getTracks().forEach(t=>t.stop()); }catch(_){}
+  try{ inCtx && inCtx.close(); }catch(_){} try{ wake && wake.release(); }catch(_){}
+  setTimeout(() => { if (location.hash) history.replaceState(null, "", location.pathname); resetIdle(); }, 1800);
+}
+function resetIdle(){
+  ending=false; modelIx=0; nextT=0; srcs=[]; curMode="";
+  $("who").textContent = "Jarvis"; $("answer").textContent = "Call Jarvis";
+  $("idle").classList.remove("hide"); $("modes").classList.remove("hide"); status("Tap to call");
+  $("answer").onclick = () => start("inbound");
+}
+$("hang").onclick = () => finish("Call ended");
+$("mute").onclick = () => { muted = !muted; $("mute").textContent = muted ? "Unmute" : "Mute"; };
+
+function init(){
+  const c = cfg();
+  if (!c.key || !c.tok || !c.repo || location.hash === "#setup") return showSetup();
+  $("callView").classList.remove("hide"); $("modes").innerHTML = "";
+  [["Briefing","briefing"],["Recap","recap"],["Quiz me","quiz"],["Journal","journal"],["Check-in","checkin"]].forEach(([l,m]) => {
+    const b = document.createElement("button"); b.textContent = l; b.onclick = () => start(m); $("modes").appendChild(b); });
+  if (MODE){
+    $("who").textContent = LABELS[MODE] || "Jarvis"; status("Incoming call…"); $("orb").classList.add("ring");
+    $("modes").classList.add("hide"); $("answer").textContent = "Answer"; $("answer").onclick = () => start(MODE);
+  } else resetIdle();
+}
+init();
+</script>
+</body>
+</html>
